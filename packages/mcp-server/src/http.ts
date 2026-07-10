@@ -164,9 +164,162 @@ function authMiddleware(req: Request, res: Response): boolean {
   return diff === 0;
 }
 
+// ──────────────────────────────────────────────
+// OAuth 2.1 pass-through (for Claude.ai connectors)
+// ──────────────────────────────────────────────
+// Claude.ai requires OAuth 2.1 for custom connectors. It discovers our OAuth
+// endpoints via /.well-known/oauth-authorization-server, registers a client
+// via /register, redirects the user to /authorize, and exchanges the code at
+// /token. We implement a minimal auto-approve flow — no real user login, just
+// enough to satisfy Claude.ai's registration dance. For a personal/team tool
+// behind an unguessable Railway URL this is fine. Add real identity later.
+//
+// In-memory stores — cleared on redeploy. Claude.ai re-registers on each
+// connector add, so this is not a problem in practice.
+const authCodes = new Map<string, { client_id: string; code_challenge?: string; redirect_uri: string }>();
+const accessTokens = new Set<string>();
+const registeredClients = new Map<string, { client_id: string; client_secret?: string; redirect_uris: string[] }>();
+
+const BASE_URL = publicUrl();
+
+// ── OAuth discovery metadata ──
+// Claude.ai fetches this first to discover our endpoints.
+function registerOAuthRoutes(app: express.Application): void {
+
+  app.get('/.well-known/oauth-authorization-server', (_req: Request, res: Response) => {
+    res.json({
+      issuer: BASE_URL,
+      authorization_endpoint: `${BASE_URL}/authorize`,
+      token_endpoint: `${BASE_URL}/token`,
+      registration_endpoint: `${BASE_URL}/register`,
+      jwks_uri: `${BASE_URL}/.well-known/jwks.json`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
+      code_challenge_methods_supported: ['S256', 'plain'],
+    });
+  });
+
+  // Protected resource metadata (RFC 9728 — Claude.ai may fetch this too)
+  app.get('/.well-known/oauth-protected-resource', (_req: Request, res: Response) => {
+    res.json({
+      resource: BASE_URL,
+      authorization_servers: [BASE_URL],
+      bearer_methods_supported: ['header'],
+    });
+  });
+
+  // ── Dynamic Client Registration (RFC 7591) ──
+  // Claude.ai POSTs here to register itself as an OAuth client.
+  app.post('/register', (req: Request, res: Response) => {
+    const clientId = randomUUID();
+    const clientSecret = randomUUID();
+    const redirectUris: string[] = req.body.redirect_uris || [];
+    registeredClients.set(clientId, { client_id: clientId, client_secret: clientSecret, redirect_uris: redirectUris });
+    console.error(`[oauth] Registered client: ${clientId} (redirect_uris: ${redirectUris.join(', ')})`);
+    res.status(201).json({
+      client_id: clientId,
+      client_secret: clientSecret,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      redirect_uris: redirectUris,
+      token_endpoint_auth_method: 'client_secret_post',
+    });
+  });
+
+  // ── Authorization endpoint ──
+  // Claude.ai redirects the user here. We auto-approve — generate a code
+  // and redirect back to the client's redirect_uri immediately.
+  app.get('/authorize', (req: Request, res: Response) => {
+    const clientId = req.query.client_id as string;
+    const redirectUri = req.query.redirect_uri as string;
+    const codeChallenge = req.query.code_challenge as string | undefined;
+    const state = req.query.state as string | undefined;
+    const responseType = req.query.response_type as string;
+
+    if (!clientId || !redirectUri || responseType !== 'code') {
+      res.status(400).json({ error: 'invalid_request', error_description: 'Missing required parameters' });
+      return;
+    }
+
+    const code = randomUUID();
+    authCodes.set(code, { client_id: clientId, code_challenge: codeChallenge, redirect_uri: redirectUri });
+    console.error(`[oauth] Authorize: client=${clientId}, code=${code}, redirect=${redirectUri}`);
+
+    const callback = new URL(redirectUri);
+    callback.searchParams.set('code', code);
+    if (state) callback.searchParams.set('state', state);
+    res.redirect(302, callback.toString());
+  });
+
+  // ── Token endpoint ──
+  // Claude.ai exchanges the authorization code for an access token here.
+  // We issue a static token (or a random one) — the /mcp endpoint doesn't
+  // validate it when MCP_AUTH_TOKEN is unset.
+  app.post('/token', (req: Request, res: Response) => {
+    const grantType = req.body.grant_type as string;
+
+    if (grantType === 'authorization_code') {
+      const code = req.body.code as string;
+      const codeData = authCodes.get(code);
+      if (!codeData) {
+        res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid authorization code' });
+        return;
+      }
+      authCodes.delete(code);
+
+      // Verify PKCE if a challenge was provided during authorize
+      if (codeData.code_challenge && req.body.code_verifier) {
+        // S256: base64url(sha256(verifier))
+        const crypto = require('node:crypto');
+        const hash = crypto.createHash('sha256').update(req.body.code_verifier).digest();
+        const computed = hash.toString('base64url');
+        if (computed !== codeData.code_challenge) {
+          res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
+          return;
+        }
+      }
+
+      const token = randomUUID() + randomUUID();
+      accessTokens.add(token);
+      console.error(`[oauth] Token issued for client=${codeData.client_id}`);
+      res.json({
+        access_token: token,
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'mcp',
+      });
+      return;
+    }
+
+    if (grantType === 'refresh_token') {
+      // Issue a new token for refresh — we don't track refresh tokens
+      // (single-use session), just issue a new one.
+      const token = randomUUID() + randomUUID();
+      accessTokens.add(token);
+      res.json({
+        access_token: token,
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'mcp',
+      });
+      return;
+    }
+
+    res.status(400).json({ error: 'unsupported_grant_type' });
+  });
+
+  // JWKS endpoint — we don't use signed tokens, return empty key set
+  app.get('/.well-known/jwks.json', (_req: Request, res: Response) => {
+    res.json({ keys: [] });
+  });
+
+  console.error('[oauth] OAuth 2.1 pass-through routes registered');
+}
+
 export async function startHttp(): Promise<void> {
   const app = express();
   app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true })); // OAuth token endpoint sends form data
 
   // Static UI bundle. ui-resources.ts references /prd-builder-ui/assets/* so the
   // mount path MUST match that prefix.
@@ -176,6 +329,9 @@ export async function startHttp(): Promise<void> {
   app.get('/healthz', (_req: Request, res: Response) => {
     res.json({ ok: true, ts: Date.now() });
   });
+
+  // OAuth routes — must be registered before /mcp so they don't get swallowed.
+  registerOAuthRoutes(app);
 
   // Landing page: shows the connect URL a PM pastes into Claude.ai settings.
   app.get('/', (_req: Request, res: Response) => {
@@ -257,6 +413,7 @@ export async function startHttp(): Promise<void> {
   app.listen(port, () => {
     console.error(`[http] PRD Builder MCP server (Streamable HTTP) on ${publicUrl()}/mcp`);
     console.error('[http] Healthcheck at /healthz');
+    console.error('[http] OAuth discovery at /.well-known/oauth-authorization-server');
   });
 }
 
