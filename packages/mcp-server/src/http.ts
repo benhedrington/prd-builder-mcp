@@ -370,8 +370,8 @@ export async function startHttp(): Promise<void> {
     try {
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      console.error('[http] POST /mcp error:', err);
-      if (!res.headersSent) res.status(500).json({ error: 'mcp_error' });
+      console.error('[http] POST /mcp error:', err instanceof Error ? err.stack : err);
+      if (!res.headersSent) res.status(500).json({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -383,8 +383,8 @@ export async function startHttp(): Promise<void> {
     try {
       await transport.handleRequest(req, res);
     } catch (err) {
-      console.error('[http] GET /mcp error:', err);
-      if (!res.headersSent) res.status(500).json({ error: 'mcp_stream_error' });
+      console.error('[http] GET /mcp error:', err instanceof Error ? err.stack : err);
+      if (!res.headersSent) res.status(500).json({ error: 'mcp_stream_error', message: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -396,8 +396,8 @@ export async function startHttp(): Promise<void> {
     try {
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      console.error('[http] DELETE /mcp error:', err);
-      if (!res.headersSent) res.status(500).json({ error: 'mcp_error' });
+      console.error('[http] DELETE /mcp error:', err instanceof Error ? err.stack : err);
+      if (!res.headersSent) res.status(500).json({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
     }
   });
 
