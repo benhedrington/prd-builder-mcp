@@ -80,7 +80,7 @@ export function handleUIResource(
         contents: [
           {
             uri,
-            mimeType: 'text/html',
+            mimeType: 'text/html;profile=mcp-app',
             text: html,
           },
         ],
