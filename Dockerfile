@@ -78,9 +78,9 @@ COPY --from=build /app/packages/prd-engine/dist  packages/prd-engine/dist
 # The React UI bundle — served statically by the HTTP entry.
 COPY --from=build /app/ui-dist                    ui-dist
 
-# Persistence volume.
+# Persistence directory — mount a Railway Volume at /data via the Railway UI.
+# (Railway doesn't support the Docker VOLUME instruction; use Settings > Volumes)
 RUN mkdir -p /data/prds
-VOLUME /data
 
 # Railway injects PORT; the HTTP entry listens on $PORT.
 EXPOSE 3000
