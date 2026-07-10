@@ -30,7 +30,6 @@
 import express, { type Request, type Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
@@ -57,7 +56,7 @@ import { handleUIResource, listUIResources } from './resources/ui-resources.js';
 // Inside the Docker image the bundle is copied to /app/ui-dist. In a local
 // `npm run start:http` run from the repo root it lives at packages/ui/dist.
 // We pick whichever exists so the same entry works in both contexts.
-const here = dirname(fileURLToPath(import.meta.url));
+const here = __dirname;
 const candidates = [
   resolve(process.cwd(), 'ui-dist'),                 // Docker runtime stage
   resolve(process.cwd(), 'packages/ui/dist'),         // local npm start from repo root
