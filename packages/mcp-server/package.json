@@ -2,7 +2,7 @@
   "name": "@prd-builder/mcp-server",
   "version": "0.1.0",
   "description": "MCP Server for the PRD Builder App \u2014 registers tools with UI metadata, handles tool calls, serves interactive UI resources",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "bin": {
     "prd-builder-mcp": "src/index.ts"
   },
