@@ -102,7 +102,7 @@ export function listUIResources() {
       uri: 'ui://prd-builder/main',
       name: 'PRD Builder Main UI',
       description: 'Interactive PRD builder with section management, completeness scoring, and inline editing.',
-      mimeType: 'text/html',
+      mimeType: 'text/html;profile=mcp-app',
     },
   ];
 }
