@@ -201,13 +201,19 @@ function registerOAuthRoutes(app: express.Application): void {
   });
 
   // Protected resource metadata (RFC 9728 — Claude.ai may fetch this too)
-  app.get('/.well-known/oauth-protected-resource', (_req: Request, res: Response) => {
+  // Claude.ai appends the resource path, so it looks for:
+  //   /.well-known/oauth-protected-resource/mcp
+  // We handle both the base and path-suffixed versions.
+  const resourceMetadata = (_req: Request, res: Response) => {
     res.json({
-      resource: BASE_URL,
+      resource: `${BASE_URL}/mcp`,
       authorization_servers: [BASE_URL],
       bearer_methods_supported: ['header'],
+      scopes_supported: ['mcp'],
     });
-  });
+  };
+  app.get('/.well-known/oauth-protected-resource', resourceMetadata);
+  app.get('/.well-known/oauth-protected-resource/mcp', resourceMetadata);
 
   // ── Dynamic Client Registration (RFC 7591) ──
   // Claude.ai POSTs here to register itself as an OAuth client.
@@ -348,18 +354,37 @@ export async function startHttp(): Promise<void> {
   });
 
   // ── MCP Streamable HTTP transport ────────────────────────────────────────
-  // stateless single-session mode: one transport + one server for the process
-  // lifetime. clone the pattern from the MCP TS SDK docs/express sample.
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // stateless; no session id assignment
-  });
-  const mcpServer = createServer();
-  await mcpServer.connect(transport);
-
+  // Stateless mode: create a new transport + server per request.
+  // The SDK throws 'Stateless transport cannot be reused across requests'
+  // if we try to reuse a single instance — see webStandardStreamableHttp.js.
+  // Pattern from the SDK's simpleStatelessStreamableHttp example.
   if (process.env.MCP_AUTH_TOKEN) {
     console.error('[http] Auth enabled — MCP_AUTH_TOKEN is set');
   } else {
     console.error('[http] WARNING: no MCP_AUTH_TOKEN set — /mcp endpoint is open');
+  }
+
+  async function handleMcpRequest(req: Request, res: Response, body?: unknown) {
+    try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      const mcpServer = createServer();
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, body);
+      res.on('close', () => {
+        transport.close();
+        mcpServer.close();
+      });
+    } catch (err) {
+      console.error('[http] /mcp error:', err instanceof Error ? err.stack : err);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+        });
+      }
+    }
   }
 
   app.post('/mcp', async (req: Request, res: Response) => {
@@ -367,12 +392,7 @@ export async function startHttp(): Promise<void> {
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
-    try {
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[http] POST /mcp error:', err instanceof Error ? err.stack : err);
-      if (!res.headersSent) res.status(500).json({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
-    }
+    await handleMcpRequest(req, res, req.body);
   });
 
   app.get('/mcp', async (req: Request, res: Response) => {
@@ -380,12 +400,7 @@ export async function startHttp(): Promise<void> {
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
-    try {
-      await transport.handleRequest(req, res);
-    } catch (err) {
-      console.error('[http] GET /mcp error:', err instanceof Error ? err.stack : err);
-      if (!res.headersSent) res.status(500).json({ error: 'mcp_stream_error', message: err instanceof Error ? err.message : String(err) });
-    }
+    await handleMcpRequest(req, res);
   });
 
   app.delete('/mcp', async (req: Request, res: Response) => {
@@ -393,12 +408,7 @@ export async function startHttp(): Promise<void> {
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
-    try {
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[http] DELETE /mcp error:', err instanceof Error ? err.stack : err);
-      if (!res.headersSent) res.status(500).json({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
-    }
+    await handleMcpRequest(req, res, req.body);
   });
 
   // 404 for anything else — keep it quiet so logs stay readable.
