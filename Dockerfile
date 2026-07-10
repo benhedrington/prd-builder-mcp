@@ -57,9 +57,8 @@ ENV PORT=3000
 # Where file-backed PRD persistence lives (see DEPLOYMENT.md Phase 5 Option A).
 # Mount a Railway volume here for durability across redeploys.
 ENV PRD_STORE_DIR=/data/prds
-# Bearer token for the /mcp endpoint. Set this in Railway's Variables tab.
-# If left empty, auth is disabled (open endpoint — fine for dev, not prod).
-ENV MCP_AUTH_TOKEN=
+# MCP_AUTH_TOKEN is set via Railway Variables (not in Dockerfile for security).
+# If unset at runtime, auth is disabled (open endpoint — fine for dev, not prod).
 
 WORKDIR /app
 

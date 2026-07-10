@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "description": "Shared domain types for the PRD Builder MCP App",
-  "main": "src/types.ts",
-  "types": "src/types.ts",
-  "files": ["src"],
+  "main": "dist/types.js",
+  "types": "dist/types.d.ts",
+  "files": [
+    "src",
+    "dist"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
   }
 }
