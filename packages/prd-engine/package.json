@@ -1,0 +1,16 @@
+{
+  "name": "@prd-builder/engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Core PRD engine: templates, validation, scoring, and export",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@prd-builder/shared": "*"
+  }
+}

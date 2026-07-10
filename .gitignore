@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.js
+*.js.map
+*.d.ts
+!*config.js
+!vite.config.*
+data/
+.ui/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env
+.env.local
