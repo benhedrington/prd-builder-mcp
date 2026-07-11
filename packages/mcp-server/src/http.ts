@@ -319,13 +319,13 @@ The section IDs are stable and used by open_prd_builder, get_prd, and update_prd
   // ── Register the UI resource ──
   registerAppResource(server, RESOURCE_URI, RESOURCE_URI, { mimeType: RESOURCE_MIME_TYPE },
     async (): Promise<ReadResourceResult> => {
-      // TEMPORARY: minimal test HTML to isolate rendering issue
-      const html = '<!DOCTYPE html>\n<html><head><meta charset="UTF-8"><title>PRD Builder</title></head>\n<body style="font-family:system-ui;padding:20px">\n<h1>PRD Builder Connected</h1>\n<p>If you see this, MCP Apps UI rendering works.</p>\n<p>Resource URI: ui://prd-builder/main</p>\n</body></html>';
+      const html = getInlinedHTML();
       return {
         contents: [{
           uri: RESOURCE_URI,
           mimeType: RESOURCE_MIME_TYPE,
           text: html,
+          _meta: { ui: { prefersBorder: true } },
         }],
       };
     }
