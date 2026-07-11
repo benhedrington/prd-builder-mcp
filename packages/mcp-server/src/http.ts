@@ -157,6 +157,7 @@ Use update_prd_section with prdId "${prd.id}" and a sectionId above to push cont
         sections,
         missingRequired: score.missingRequired,
       },
+      _meta: { ui: { resourceUri: RESOURCE_URI } },
     };
   });
 
