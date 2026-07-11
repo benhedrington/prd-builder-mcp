@@ -83,6 +83,10 @@ export function handleOpenPRDBuilder(
     missingRequired: score.missingRequired,
   };
 
+  // Include BOTH a text block (for the LLM to read) and an embedded resource
+  // block (for Claude.ai to know which ui:// resource to render as an iframe).
+  // The resource block references the ui:// URI — the host fetches the HTML
+  // via resources/read and renders it in a sandboxed iframe.
   return {
     content: [
       {
@@ -100,6 +104,13 @@ ${prd.sections.map((s) => `  - ${s.id}: ${s.title} [${s.status}]${s.required ? '
 
 Use get_prd with prdId "${prd.id}" to fetch full section content at any time.
 Use update_prd_section with prdId "${prd.id}" and a sectionId above to push content.`,
+      },
+      {
+        type: 'resource',
+        resource: {
+          uri: 'ui://prd-builder/main',
+          mimeType: 'text/html;profile=mcp-app',
+        },
       },
     ],
     structuredContent,
