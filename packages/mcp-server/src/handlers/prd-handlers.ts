@@ -28,7 +28,7 @@ import {
   exportToPlainText,
   allTemplates,
 } from '@prd-builder/engine';
-import { prdStore } from './store';
+import { prdStore } from './store.js';
 
 // ──────────────────────────────────────────────
 // open_prd_builder
@@ -104,13 +104,6 @@ ${prd.sections.map((s) => `  - ${s.id}: ${s.title} [${s.status}]${s.required ? '
 
 Use get_prd with prdId "${prd.id}" to fetch full section content at any time.
 Use update_prd_section with prdId "${prd.id}" and a sectionId above to push content.`,
-      },
-      {
-        type: 'resource',
-        resource: {
-          uri: 'ui://prd-builder/main',
-          mimeType: 'text/html;profile=mcp-app',
-        },
       },
     ],
     structuredContent,
@@ -388,4 +381,4 @@ export function handleGetPRD(args: GetPRDArgs): CallToolResult {
 // Router
 // ──────────────────────────────────────────────
 
-export { prdStore } from './store';
+export { prdStore } from './store.js';

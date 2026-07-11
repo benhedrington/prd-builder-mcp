@@ -19,7 +19,7 @@ import { existsSync } from 'node:fs';
 // ──────────────────────────────────────────────
 // Resolve UI bundle directory
 // ──────────────────────────────────────────────
-const here = __dirname;
+const here = import.meta.dirname;
 const candidates = [
   resolve(process.cwd(), 'ui-dist'),
   resolve(process.cwd(), 'packages/ui/dist'),

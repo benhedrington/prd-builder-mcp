@@ -24,7 +24,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import { allTools } from './tools/prd-tools';
+import { allTools } from './tools/prd-tools.js';
 import {
   handleOpenPRDBuilder,
   handleGetPRD,
@@ -32,8 +32,8 @@ import {
   handleUpdateSection,
   handleExportPRD,
   handleListTemplates,
-} from './handlers/prd-handlers';
-import { handleUIResource, listUIResources } from './resources/ui-resources';
+} from './handlers/prd-handlers.js';
+import { handleUIResource, listUIResources } from './resources/ui-resources.js';
 
 // ──────────────────────────────────────────────
 // Server Setup
