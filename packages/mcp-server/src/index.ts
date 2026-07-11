@@ -47,7 +47,15 @@ const server = new Server(
   {
     capabilities: {
       tools: {},
-      resources: {}, // UI resources are served via the resources capability
+      resources: {},
+      // Advertise MCP Apps (SEP-1865) UI extension support.
+      // Without this, the host doesn't know we serve ui:// resources
+      // and falls back to text-only for all tool calls.
+      extensions: {
+        'io.modelcontextprotocol/ui': {
+          mimeTypes: ['text/html;profile=mcp-app'],
+        },
+      },
     } as ServerCapabilities,
   }
 );

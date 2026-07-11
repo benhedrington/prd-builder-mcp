@@ -83,7 +83,15 @@ console.error(`[http] Serving UI bundle from ${uiDir}`);
 function createServer(): Server {
   const server = new Server(
     { name: 'prd-builder-mcp', version: '0.1.0' },
-    { capabilities: { tools: {}, resources: {} } }
+    { capabilities: {
+      tools: {},
+      resources: {},
+      extensions: {
+        'io.modelcontextprotocol/ui': {
+          mimeTypes: ['text/html;profile=mcp-app'],
+        },
+      },
+    } }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
