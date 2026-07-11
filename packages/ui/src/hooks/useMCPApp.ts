@@ -1,13 +1,14 @@
 /**
  * useMCPApp — hook for communicating with the MCP host.
  *
- * This wraps the @modelcontextprotocol/ext-apps SDK's PostMessageTransport
- * to provide a clean React hook for:
- * 1. Receiving data from the server (PRD loaded, section updated, etc.)
- * 2. Sending user actions back to the server (edits, reorders, exports)
+ * Implements the MCP Apps communication protocol (SEP-1865):
+ * 1. UI sends `ui/initialize` request to host via postMessage
+ * 2. Host responds with `McpUiInitializeResult` (theme, tool context)
+ * 3. UI sends `ui/notifications/initialized` notification
+ * 4. Host sends `ui/notifications/tool-result` with the tool call data
+ * 5. UI can call `tools/call` to invoke tools on the server via the host
  *
- * The communication happens via postMessage between the iframe (this UI)
- * and the host (Claude/ChatGPT), which proxies to the MCP server.
+ * All communication uses JSON-RPC 2.0 over postMessage.
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -28,7 +29,48 @@ interface MCPAppState {
   score: CompletenessScore | null;
   template: PRDTemplate | null;
   connected: boolean;
+  hostContext: HostContext | null;
   lastMessage: ServerToUIMessage | null;
+}
+
+interface HostContext {
+  theme?: 'light' | 'dark';
+  toolInfo?: {
+    name: string;
+    inputSchema: Record<string, unknown>;
+  };
+  displayMode?: 'inline' | 'fullscreen' | 'pip';
+}
+
+// ──────────────────────────────────────────────
+// JSON-RPC helpers
+// ──────────────────────────────────────────────
+
+let nextRequestId = 1;
+
+function sendRequest(method: string, params: Record<string, unknown>): Promise<any> {
+  const id = nextRequestId++;
+  return new Promise((resolve, reject) => {
+    const listener = (event: MessageEvent) => {
+      const data = event.data;
+      if (data?.id === id) {
+        window.removeEventListener('message', listener);
+        if (data.error) reject(new Error(JSON.stringify(data.error)));
+        else resolve(data.result);
+      }
+    };
+    window.addEventListener('message', listener);
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    // Timeout after 10s — host may not respond if not ready
+    setTimeout(() => {
+      window.removeEventListener('message', listener);
+      reject(new Error(`Timeout waiting for ${method} response`));
+    }, 10000);
+  });
+}
+
+function sendNotification(method: string, params: Record<string, unknown>) {
+  window.parent.postMessage({ jsonrpc: '2.0', method, params }, '*');
 }
 
 // ──────────────────────────────────────────────
@@ -41,99 +83,192 @@ export function useMCPApp() {
     score: null,
     template: null,
     connected: false,
+    hostContext: null,
     lastMessage: null,
   });
 
-  const transportRef = useRef<any>(null);
+  const initializedRef = useRef(false);
 
-  // ── Setup: connect to host via postMessage ──
+  // ── Setup: perform the ui/initialize handshake ──
   useEffect(() => {
-    // The ext-apps SDK provides a transport that handles the postMessage protocol.
-    // In a real build, import from @modelcontextprotocol/ext-apps
-    // For now, we implement a minimal postMessage listener that works with
-    // the MCP Apps JSON-RPC protocol.
+    let cancelled = false;
 
+    async function initialize() {
+      try {
+        // Step 1: Send ui/initialize request to the host
+        const result = await sendRequest('ui/initialize', {
+          protocolVersion: '2026-01-26',
+          clientInfo: { name: 'prd-builder-ui', version: '1.0.0' },
+          capabilities: {},
+        });
+
+        if (cancelled) return;
+
+        const hostContext: HostContext = {
+          theme: result?.hostContext?.theme,
+          toolInfo: result?.hostContext?.toolInfo?.tool
+            ? { name: result.hostContext.toolInfo.tool.name, inputSchema: result.hostContext.toolInfo.tool.inputSchema || {} }
+            : undefined,
+          displayMode: result?.hostContext?.displayMode,
+        };
+
+        setState((prev) => ({
+          ...prev,
+          hostContext,
+          connected: true,
+        }));
+
+        // Step 2: Send ui/notifications/initialized
+        sendNotification('ui/notifications/initialized', {});
+
+        initializedRef.current = true;
+      } catch (err) {
+        // Host may not support the full handshake — try a degraded mode
+        console.warn('[useMCPApp] ui/initialize failed, falling back:', err);
+        setState((prev) => ({ ...prev, connected: false }));
+      }
+    }
+
+    initialize();
+
+    // ── Listen for host notifications ──
     const handleMessage = (event: MessageEvent) => {
-      // Verify origin for security — in production, check against allowed origins
-      // const allowedOrigin = ... ;
-      // if (event.origin !== allowedOrigin) return;
-
       const data = event.data;
       if (!data || typeof data !== 'object') return;
 
-      // MCP Apps messages come wrapped in JSON-RPC
-      // The SDK handles the protocol details — here we extract the notification payload
-      const message = extractMessage(data) as ServerToUIMessage | null;
-      if (!message) return;
+      // Only handle JSON-RPC messages
+      if (data.jsonrpc !== '2.0') return;
 
-      setState((prev) => {
-        const newState = { ...prev, lastMessage: message };
+      // Handle ui/notifications/tool-result — this carries the tool call data
+      if (data.method === 'ui/notifications/tool-result') {
+        const toolResult = data.params;
+        const prdData = toolResult?._meta?.prd || toolResult?.structuredContent;
 
-        switch (message.type) {
-          case 'prd:loaded':
-            return { ...newState, prd: message.prd, score: message.score, connected: true };
-          case 'section:updated':
-            if (prev.prd) {
-              return {
-                ...newState,
-                prd: {
-                  ...prev.prd,
-                  sections: prev.prd.sections.map((s) =>
-                    s.id === message.section.id ? message.section : s
-                  ),
-                },
-                score: message.score,
-              };
-            }
-            return newState;
-          case 'section:content_pushed':
-            if (prev.prd) {
-              return {
-                ...newState,
-                prd: {
-                  ...prev.prd,
-                  sections: prev.prd.sections.map((s) =>
-                    s.id === message.sectionId ? { ...s, content: message.content } : s
-                  ),
-                },
-              };
-            }
-            return newState;
-          case 'score:updated':
-            return { ...newState, score: message.score };
-          case 'template:loaded':
-            return { ...newState, template: message.template };
-          case 'export:ready':
-            // Trigger download or display in UI
-            return newState;
-          default:
-            return newState;
+        if (prdData?.prd) {
+          setState((prev) => ({
+            ...prev,
+            prd: prdData.prd,
+            score: prdData.score,
+            connected: true,
+            lastMessage: {
+              type: 'prd:loaded' as const,
+              prd: prdData.prd,
+              score: prdData.score,
+            },
+          }));
+        } else if (toolResult?.structuredContent) {
+          // Parse structuredContent for PRD data
+          const sc = toolResult.structuredContent;
+          if (sc.prdId) {
+            // This is from open_prd_builder — build a minimal PRD from the section map
+            // The full PRD might come via _meta
+            setState((prev) => ({
+              ...prev,
+              connected: true,
+              lastMessage: {
+                type: 'prd:loaded' as const,
+                prd: prev.prd, // may be set via _meta above
+                score: prev.score,
+              },
+            }));
+          }
         }
-      });
+        return;
+      }
+
+      // Handle ui/notifications/host-context-changed (theme changes, etc.)
+      if (data.method === 'ui/notifications/host-context-changed') {
+        const ctx = data.params;
+        setState((prev) => ({
+          ...prev,
+          hostContext: {
+            ...prev.hostContext,
+            theme: ctx?.theme || prev.hostContext?.theme,
+          },
+        }));
+        return;
+      }
+
+      // Handle ui/notifications/tool-input (input changes before result)
+      if (data.method === 'ui/notifications/tool-input') {
+        // Tool input received — could use for live preview
+        return;
+      }
+
+      // Handle ui/resource-teardown
+      if (data.method === 'ui/resource-teardown') {
+        setState((prev) => ({ ...prev, connected: false }));
+        return;
+      }
+
+      // Handle responses to our requests (already handled by sendRequest listeners)
+      // Handle server-pushed notifications for section updates, etc.
+      const message = extractAppMessage(data);
+      if (message) {
+        setState((prev) => {
+          const newState = { ...prev, lastMessage: message };
+
+          switch (message.type) {
+            case 'prd:loaded':
+              return { ...newState, prd: message.prd, score: message.score, connected: true };
+            case 'section:updated':
+              if (prev.prd) {
+                return {
+                  ...newState,
+                  prd: {
+                    ...prev.prd,
+                    sections: prev.prd.sections.map((s) =>
+                      s.id === message.section.id ? message.section : s
+                    ),
+                  },
+                  score: message.score,
+                };
+              }
+              return newState;
+            case 'section:content_pushed':
+              if (prev.prd) {
+                return {
+                  ...newState,
+                  prd: {
+                    ...prev.prd,
+                    sections: prev.prd.sections.map((s) =>
+                      s.id === message.sectionId ? { ...s, content: message.content } : s
+                    ),
+                  },
+                };
+              }
+              return newState;
+            case 'score:updated':
+              return { ...newState, score: message.score };
+            case 'template:loaded':
+              return { ...newState, template: message.template };
+            default:
+              return newState;
+          }
+        });
+      }
     };
 
     window.addEventListener('message', handleMessage);
 
-    // Signal that the UI is ready to receive data
-    sendMessage({ type: 'ui:ready' });
-
     return () => {
+      cancelled = true;
       window.removeEventListener('message', handleMessage);
     };
   }, []);
 
-  // ── Send messages to server ──
+  // ── Send messages to server via host proxy ──
   const sendMessage = useCallback((message: UIToServerMessage) => {
-    // Wrap in JSON-RPC notification format that the host expects
-    const envelope = {
-      jsonrpc: '2.0',
-      method: 'notifications/message',
-      params: message,
-    };
-    window.parent.postMessage(envelope, '*'); // In production, use specific origin
+    // Use JSON-RPC notification — the host forwards to the MCP server
+    sendNotification('notifications/message', message as unknown as Record<string, unknown>);
   }, []);
 
-  // ── Convenience methods for common actions ──
+  // ── Call a tool on the MCP server via the host ──
+  const callTool = useCallback(async (toolName: string, args: Record<string, unknown>) => {
+    return sendRequest('tools/call', { name: toolName, arguments: args });
+  }, []);
+
+  // ── Convenience methods ──
 
   const editSection = useCallback(
     (sectionId: string, content: string) => {
@@ -194,6 +329,7 @@ export function useMCPApp() {
     score: state.score,
     template: state.template,
     connected: state.connected,
+    hostContext: state.hostContext,
     // Actions
     editSection,
     changeField,
@@ -203,33 +339,27 @@ export function useMCPApp() {
     requestAnalysis,
     requestExport,
     selectTemplate,
+    callTool,
   };
 }
 
 // ──────────────────────────────────────────────
-// Helper: extract message from JSON-RPC envelope
+// Helper: extract app-specific message from JSON-RPC envelope
 // ──────────────────────────────────────────────
 
-function extractMessage(data: any): ServerToUIMessage | null {
-  // Direct message format (simplified protocol)
-  if (data.type && data.type.startsWith('prd:') || data.type?.startsWith('section:') ||
-      data.type?.startsWith('score:') || data.type?.startsWith('template:') ||
-      data.type?.startsWith('export:') || data.type === 'ui:ready') {
-    return data;
+function extractAppMessage(data: any): ServerToUIMessage | null {
+  // Direct message format (our custom protocol layer)
+  if (data.type) {
+    if (data.type.startsWith('prd:') || data.type.startsWith('section:') ||
+        data.type.startsWith('score:') || data.type.startsWith('template:') ||
+        data.type.startsWith('export:')) {
+      return data as ServerToUIMessage;
+    }
   }
 
-  // JSON-RPC notification format (standard MCP Apps protocol)
-  if (data.jsonrpc === '2.0' && data.method === 'notifications/message') {
+  // JSON-RPC notification with our custom message types
+  if (data.jsonrpc === '2.0' && data.method === 'notifications/message' && data.params) {
     return data.params as ServerToUIMessage;
-  }
-
-  // JSON-RPC result (response to a tool call)
-  if (data.jsonrpc === '2.0' && data.result?._meta?.prd) {
-    return {
-      type: 'prd:loaded',
-      prd: data.result._meta.prd.prd,
-      score: data.result._meta.prd.score,
-    };
   }
 
   return null;
