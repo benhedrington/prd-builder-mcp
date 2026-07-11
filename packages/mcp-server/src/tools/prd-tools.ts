@@ -71,6 +71,10 @@ This tool returns:
     ui: {
       resourceUri: 'ui://prd-builder/main',
     },
+    // Deprecated flat key — Claude.ai only recognizes this form (issue #71).
+    // The spec defines the nested _meta.ui.resourceUri, but Claude.ai's
+    // renderer ignores it. Emitting both ensures compatibility.
+    'ui/resourceUri': 'ui://prd-builder/main',
   },
 };
 
