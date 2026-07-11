@@ -43,6 +43,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { allTools } from './tools/prd-tools.js';
 import {
   handleOpenPRDBuilder,
+  handleGetPRD,
   handleAnalyzePRD,
   handleUpdateSection,
   handleExportPRD,
@@ -99,6 +100,7 @@ function createServer(): Server {
     try {
       switch (name) {
         case 'open_prd_builder':       return handleOpenPRDBuilder(args as never);
+        case 'get_prd':                return handleGetPRD(args as never);
         case 'analyze_prd':            return handleAnalyzePRD(args as never);
         case 'update_prd_section':     return handleUpdateSection(args as never);
         case 'export_prd':             return handleExportPRD(args as never);

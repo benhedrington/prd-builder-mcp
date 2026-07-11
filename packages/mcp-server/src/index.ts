@@ -27,6 +27,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { allTools } from './tools/prd-tools';
 import {
   handleOpenPRDBuilder,
+  handleGetPRD,
   handleAnalyzePRD,
   handleUpdateSection,
   handleExportPRD,
@@ -77,6 +78,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'open_prd_builder':
         return handleOpenPRDBuilder(args as never);
+
+      case 'get_prd':
+        return handleGetPRD(args as never);
 
       case 'analyze_prd':
         return handleAnalyzePRD(args as never);

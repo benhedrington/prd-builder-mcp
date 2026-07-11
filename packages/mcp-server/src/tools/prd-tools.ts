@@ -18,6 +18,7 @@ import type {
   AnalyzePRDArgs,
   UpdateSectionArgs,
   ExportPRDArgs,
+  GetPRDArgs,
 } from '@prd-builder/shared';
 
 // ──────────────────────────────────────────────
@@ -38,7 +39,12 @@ The tool opens a visual interface inline in the conversation where the PM can:
 
 You (the assistant) can help draft sections in the chat, and the PM will see
 them appear in the visual builder. The PM can also edit directly in the UI
-and you'll see their changes.`,
+and you'll see their changes via get_prd.
+
+This tool returns:
+- prdId: the ID of the created/loaded PRD (needed for all other tools)
+- sections: array of { id, title, status, required } for every section
+- Use the section IDs from this response when calling update_prd_section.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -109,7 +115,12 @@ Use this when you've drafted content for a section (e.g., problem statement, use
 and want to push it into the PRD. The PM will see the update appear in the visual builder
 if it's open, or it will be there when they next open it.
 
-You can also use this to update section status (e.g., mark as "complete" after review).`,
+You can also use this to update section status (e.g., mark as "complete" after review).
+
+IMPORTANT: You must call open_prd_builder or get_prd first to obtain the valid sectionId values.
+If you provide an invalid sectionId, the error response will list all valid IDs for that PRD.
+
+On success, returns the updated section object with its new status.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -171,11 +182,41 @@ The exported content is returned as text that the PM can copy or save to a file.
 
 export const listTemplatesTool: Tool = {
   name: 'list_prd_templates',
-  description: `List all available PRD templates with their descriptions.
-Use this to help the PM choose the right template for their use case.`,
+  description: `List all available PRD templates with their full section schemas.
+Use this to help the PM choose the right template and to discover the section IDs
+each template defines. Each template returns:
+- id, name, category, description, recommended
+- sections: array of { id, title, type, required, priority, weight, guidance }
+The section IDs are stable and used by open_prd_builder, get_prd, and update_prd_section.`,
   inputSchema: {
     type: 'object',
     properties: {},
+  },
+};
+
+
+// ──────────────────────────────────────────────
+// Tool: get_prd
+// Fetches the full state of a PRD — section IDs, titles, statuses, content.
+// This is how the assistant sees UI-side changes after a user edits inline.
+// ──────────────────────────────────────────────
+
+export const getPRDTool: Tool = {
+  name: 'get_prd',
+  description: `Fetch the full state of a PRD including all section IDs, titles, statuses, and content.
+Use this after open_prd_builder to check what sections exist and their current state.
+This is the primary read tool — use it to see what the PM has edited in the UI.
+Returns: prdId, title, templateId, overall completeness score, and for each section:
+  { id, title, status, required, content, updatedAt }`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      prdId: {
+        type: 'string',
+        description: 'ID of the PRD to fetch. Obtain this from open_prd_builder or list existing PRDs.',
+      },
+    },
+    required: ['prdId'],
   },
 };
 
@@ -185,6 +226,7 @@ Use this to help the PM choose the right template for their use case.`,
 
 export const allTools: Tool[] = [
   openPRDBuilderTool,
+  getPRDTool,
   analyzePRDTool,
   updateSectionTool,
   exportPRDTool,

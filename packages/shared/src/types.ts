@@ -212,6 +212,14 @@ export interface ExportPRDArgs {
 }
 
 /**
+ * Arguments for the get_prd tool.
+ * Fetches the full state of a PRD including section IDs, titles, statuses, and content.
+ */
+export interface GetPRDArgs {
+  prdId: string;
+}
+
+/**
  * Result returned from MCP tool calls.
  * The LLM sees this as structured data alongside the UI resource.
  */

@@ -15,6 +15,7 @@ import type {
   AnalyzePRDArgs,
   UpdateSectionArgs,
   ExportPRDArgs,
+  GetPRDArgs,
   ToolResult,
 } from '@prd-builder/shared';
 import {
@@ -61,30 +62,47 @@ export function handleOpenPRDBuilder(
 
   const score = scoreDocument(prd);
 
+  // Build machine-readable section map for the LLM
+  const sections = prd.sections.map((s) => ({
+    id: s.id,
+    title: s.title,
+    type: s.type,
+    required: s.required,
+    priority: s.priority,
+    status: s.status,
+    weight: s.weight,
+  }));
+
+  const structuredContent = {
+    prdId: prd.id,
+    title: prd.title,
+    templateId: args.templateId || 'standard-feature',
+    completeness: score.overall,
+    qualityLabel: getQualityLabel(score.overall),
+    sections,
+    missingRequired: score.missingRequired,
+  };
+
   return {
     content: [
       {
         type: 'text',
-        text: `PRD Builder opened for "${prd.title}" (ID: ${prd.id}).
+        text: `PRD Builder opened for "${prd.title}".
+PRD ID: ${prd.id}
 Completeness: ${score.overall}% — ${getQualityLabel(score.overall)}
 
 ${prd.sections.filter((s) => s.required && s.status === 'empty').length > 0
-  ? `⚠️ ${score.missingRequired.length} required section(s) still empty: ${score.missingRequired.join(', ')}`
-  : '✅ All required sections have content.'}
+  ? `Required sections still empty: ${score.missingRequired.join(', ')}`
+  : 'All required sections have content.'}
 
-The PM can now interact with the PRD builder UI inline. They can edit sections, reorder them, and see real-time completeness feedback. You can help by drafting section content — use the update_prd_section tool to push your drafts into the PRD.`,
-      },
-      {
-        type: 'text',
-        text: `\n**PRD Structure:**\n${prd.sections
-          .map((s) => {
-            const icon = { empty: '⬜', draft: '🔄', review: '👀', complete: '✅' }[s.status];
-            const req = s.required ? ' (required)' : '';
-            return `${icon} ${s.title}${req}`;
-          })
-          .join('\n')}`,
+Section IDs (use these with update_prd_section):
+${prd.sections.map((s) => `  - ${s.id}: ${s.title} [${s.status}]${s.required ? ' (required)' : ''}`).join('\n')}
+
+Use get_prd with prdId "${prd.id}" to fetch full section content at any time.
+Use update_prd_section with prdId "${prd.id}" and a sectionId above to push content.`,
       },
     ],
+    structuredContent,
     _meta: {
       prd: {
         prd,
@@ -156,8 +174,9 @@ export function handleUpdateSection(args: UpdateSectionArgs): CallToolResult {
 
   const section = prd.sections.find((s) => s.id === args.sectionId);
   if (!section) {
+    const validIds = prd.sections.map((s) => `"${s.id}" (${s.title})`).join(', ');
     return {
-      content: [{ type: 'text', text: `Error: Section "${args.sectionId}" not found in PRD.` }],
+      content: [{ type: 'text', text: `Error: unknown sectionId "${args.sectionId}" for PRD ${args.prdId}.\nValid section IDs: ${validIds}` }],
       isError: true,
     };
   }
@@ -180,14 +199,26 @@ export function handleUpdateSection(args: UpdateSectionArgs): CallToolResult {
   const score = scoreDocument(updated);
   const updatedSection = updated.sections.find((s) => s.id === args.sectionId)!;
 
+  // Return the updated section object so the client can confirm the write landed
+  const structuredContent = {
+    prdId: updated.id,
+    sectionId: updatedSection.id,
+    title: updatedSection.title,
+    status: updatedSection.status,
+    content: updatedSection.content,
+    updatedAt: updatedSection.updatedAt,
+    completeness: score.overall,
+    qualityLabel: getQualityLabel(score.overall),
+  };
+
   return {
     content: [
       {
         type: 'text',
-        text: `Updated section "${updatedSection.title}" — status is now "${updatedSection.status}".
-PRD completeness: ${score.overall}% (${getQualityLabel(score.overall)})`,
+        text: `Updated section "${updatedSection.title}" — status is now "${updatedSection.status}".\nPRD completeness: ${score.overall}% (${getQualityLabel(score.overall)})`,
       },
     ],
+    structuredContent,
     _meta: {
       prd: {
         prd: updated,
@@ -197,7 +228,6 @@ PRD completeness: ${score.overall}% (${getQualityLabel(score.overall)})`,
     },
   };
 }
-
 // ──────────────────────────────────────────────
 // export_prd
 // ──────────────────────────────────────────────
@@ -249,19 +279,97 @@ export function handleExportPRD(args: ExportPRDArgs): CallToolResult {
 // ──────────────────────────────────────────────
 
 export function handleListTemplates(): CallToolResult {
-  const lines: string[] = ['## Available PRD Templates\n'];
+  const structuredContent = allTemplates.map((tpl) => ({
+    id: tpl.id,
+    name: tpl.name,
+    description: tpl.description,
+    category: tpl.category,
+    recommended: tpl.recommended || false,
+    sections: tpl.sections.map((s) => ({
+      id: s.id,
+      title: s.title,
+      type: s.type,
+      required: s.required,
+      priority: s.priority,
+      weight: s.weight,
+      guidance: s.guidance || undefined,
+    })),
+  }));
+
+  // Human-readable text for the LLM
+  const lines: string[] = ['Available PRD Templates:\n'];
   for (const tpl of allTemplates) {
-    const recommended = tpl.recommended ? ' ⭐ (recommended)' : '';
-    lines.push(`### ${tpl.name}${recommended}`);
-    lines.push(`- **ID:** \`${tpl.id}\``);
-    lines.push(`- **Category:** ${tpl.category}`);
-    lines.push(`- **Description:** ${tpl.description}`);
-    lines.push(`- **Sections:** ${tpl.sections.length}`);
+    const rec = tpl.recommended ? ' (recommended)' : '';
+    lines.push(`${tpl.name}${rec}`);
+    lines.push(`  ID: ${tpl.id}`);
+    lines.push(`  Category: ${tpl.category}`);
+    lines.push(`  Sections (${tpl.sections.length}):`);
+    for (const s of tpl.sections) {
+      const req = s.required ? ' *' : '';
+      lines.push(`    - ${s.id}: ${s.title}${req}`);
+    }
     lines.push('');
+  }
+  lines.push('Section IDs marked with * are required.');
+  lines.push('Use these section IDs with open_prd_builder and update_prd_section.');
+
+  return {
+    content: [{ type: 'text', text: lines.join('\n') }],
+    structuredContent: { templates: structuredContent },
+  };
+}
+// ──────────────────────────────────────────────
+// get_prd
+// ──────────────────────────────────────────────
+
+export function handleGetPRD(args: GetPRDArgs): CallToolResult {
+  const prd = prdStore.get(args.prdId);
+  if (!prd) {
+    return {
+      content: [{ type: 'text', text: `Error: PRD "${args.prdId}" not found.` }],
+      isError: true,
+    };
+  }
+
+  const score = scoreDocument(prd);
+
+  const structuredContent = {
+    prdId: prd.id,
+    title: prd.title,
+    version: prd.version,
+    status: prd.status,
+    templateId: prd.sections[0]?.id ? 'derived-from-sections' : undefined,
+    completeness: score.overall,
+    qualityLabel: getQualityLabel(score.overall),
+    sections: prd.sections.map((s) => ({
+      id: s.id,
+      title: s.title,
+      type: s.type,
+      required: s.required,
+      priority: s.priority,
+      status: s.status,
+      content: s.content,
+      updatedAt: s.updatedAt,
+    })),
+    missingRequired: score.missingRequired,
+    topSuggestions: score.topSuggestions,
+  };
+
+  const lines: string[] = [`PRD: "${prd.title}" (ID: ${prd.id})`, `Completeness: ${score.overall}% — ${getQualityLabel(score.overall)}`, ''];
+  for (const s of prd.sections) {
+    const contentPreview = s.content ? (s.content.length > 80 ? s.content.slice(0, 80) + '...' : s.content) : '(empty)';
+    lines.push(`  ${s.id}: ${s.title} [${s.status}]${s.required ? ' (required)' : ''}`);
+    if (s.content) {
+      lines.push(`    Content: ${contentPreview}`);
+    }
+  }
+  if (score.missingRequired.length > 0) {
+    lines.push('', `Missing required: ${score.missingRequired.join(', ')}`);
   }
 
   return {
     content: [{ type: 'text', text: lines.join('\n') }],
+    structuredContent,
   };
 }
 
