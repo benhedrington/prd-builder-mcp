@@ -20,6 +20,7 @@ import {
   RESOURCE_MIME_TYPE,
 } from '@modelcontextprotocol/ext-apps/server';
 import type { CallToolResult, ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 
 import {
   createPRDFromTemplate,
@@ -118,7 +119,12 @@ This tool returns:
 - prdId: the ID of the created/loaded PRD (needed for all other tools)
 - sections: array of { id, title, status, required } for every section
 - Use the section IDs from this response when calling update_prd_section.`,
-    inputSchema: {},
+    inputSchema: {
+      templateId: z.string().optional().describe('ID of the PRD template to use. Options: "standard-feature" (default), "platform-initiative", "bugfix-small-change".'),
+      existingPRDId: z.string().optional().describe('ID of an existing PRD to load for editing. If not provided, a new PRD is created.'),
+      title: z.string().optional().describe('Title for the new PRD. If not provided, the PM can set it in the UI.'),
+      context: z.string().optional().describe('Any context the PM has shared in chat about the feature/problem. This gets pre-filled into the problem statement section.'),
+    },
     _meta: { ui: { resourceUri: RESOURCE_URI } },
   }, async (args: any): Promise<CallToolResult> => {
     let prd;
@@ -168,7 +174,9 @@ Use this after open_prd_builder to check what sections exist and their current s
 This is the primary read tool — use it to see what the PM has edited in the UI.
 Returns: prdId, title, overall completeness score, and for each section:
   { id, title, status, required, content, updatedAt }`,
-    inputSchema: {},
+    inputSchema: {
+      prdId: z.string().describe('ID of the PRD to fetch. Obtain this from open_prd_builder or list existing PRDs.'),
+    },
   }, async (args: any): Promise<CallToolResult> => {
     const prd = prdStore.get(args?.prdId);
     if (!prd) return { content: [{ type: 'text', text: `Error: PRD "${args?.prdId}" not found.` }], isError: true };
@@ -191,7 +199,10 @@ Returns: prdId, title, overall completeness score, and for each section:
   // ── analyze_prd ──
   server.registerTool('analyze_prd', {
     description: `Analyze a PRD's completeness and return a score with actionable suggestions.`,
-    inputSchema: {},
+    inputSchema: {
+      prdId: z.string().describe('ID of the PRD to analyze.'),
+      includeSuggestions: z.boolean().optional().default(true).describe('Whether to include actionable suggestions.'),
+    },
   }, async (args: any): Promise<CallToolResult> => {
     const prd = prdStore.get(args?.prdId);
     if (!prd) return { content: [{ type: 'text', text: `Error: PRD "${args?.prdId}" not found.` }], isError: true };
@@ -215,7 +226,12 @@ Returns: prdId, title, overall completeness score, and for each section:
 IMPORTANT: You must call open_prd_builder or get_prd first to obtain the valid sectionId values.
 If you provide an invalid sectionId, the error response will list all valid IDs for that PRD.
 On success, returns the updated section object with its new status.`,
-    inputSchema: {},
+    inputSchema: {
+      prdId: z.string().describe('ID of the PRD to update.'),
+      sectionId: z.string().describe('ID of the section to update.'),
+      content: z.string().optional().describe('New content for the section. Replaces existing content.'),
+      status: z.enum(['empty', 'draft', 'review', 'complete']).optional().describe('New status for the section.'),
+    },
   }, async (args: any): Promise<CallToolResult> => {
     const prd = prdStore.get(args?.prdId);
     if (!prd) return { content: [{ type: 'text', text: `Error: PRD "${args?.prdId}" not found.` }], isError: true };
@@ -253,7 +269,10 @@ On success, returns the updated section object with its new status.`,
   // ── export_prd ──
   server.registerTool('export_prd', {
     description: `Export a PRD to markdown, JSON, or plain text.`,
-    inputSchema: {},
+    inputSchema: {
+      prdId: z.string().describe('ID of the PRD to export.'),
+      format: z.enum(['markdown', 'json', 'plain']).optional().default('markdown').describe('Export format. Markdown is recommended.'),
+    },
   }, async (args: any): Promise<CallToolResult> => {
     const prd = prdStore.get(args?.prdId);
     if (!prd) return { content: [{ type: 'text', text: `Error: PRD "${args?.prdId}" not found.` }], isError: true };
