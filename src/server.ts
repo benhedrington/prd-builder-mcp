@@ -6,6 +6,8 @@
  * handshake scripts automatically.
  *
  * Streamable HTTP transport on /mcp, healthcheck on /healthz.
+ *
+ * Deploy: Railway auto-deploys from main branch.
  */
 
 import express from 'express';
