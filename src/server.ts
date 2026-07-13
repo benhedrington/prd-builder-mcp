@@ -54,21 +54,15 @@ const WIDGET_HTML = `<!DOCTYPE html>
   <p>Clicks: <span id="count">0</span></p>
   <button id="btn">Click me</button>
   <script>
-    // Minimal client-side JS — no framework, no build step.
-    // The adapter script (injected into <head>) handles the lifecycle
-    // handshake with the host (Claude). We just listen for render-data
-    // events to get tool input/output if needed.
     let clicks = 0;
     document.getElementById('btn').addEventListener('click', () => {
       clicks++;
       document.getElementById('count').textContent = String(clicks);
-      // Report size change to host so the iframe can resize
       window.parent.postMessage({
         type: 'ui-size-change',
         payload: { height: document.body.scrollHeight }
       }, '*');
     });
-    // Request render data from host (tool input/output)
     window.parent.postMessage({ type: 'ui-request-render-data' }, '*');
   </script>
 </body>
@@ -99,7 +93,6 @@ function createServer(): McpServer {
     },
   );
 
-  // One tool — linked to the UI resource via _meta.ui.resourceUri
   registerAppTool(
     server,
     'show_widget',
@@ -125,7 +118,6 @@ function createServer(): McpServer {
     },
   );
 
-  // One resource — serves the HTML widget
   registerAppResource(
     server,
     'widget_ui',
@@ -139,9 +131,21 @@ function createServer(): McpServer {
   return server;
 }
 
-// ── Express + Streamable HTTP ───────────────────────────────
+// ── Express app with CORS ───────────────────────────────────
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+
+// CORS — Claude.ai makes cross-origin requests to OAuth + MCP endpoints
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, MCP-Session-Id');
+  res.header('Access-Control-Expose-Headers', 'MCP-Session-Id');
+  if (_req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
 
 // Healthcheck
 app.get('/healthz', (_req, res) => {
@@ -185,7 +189,7 @@ app.post('/mcp', (req, res) => handleMcp(req, res));
 app.get('/mcp', (req, res) => handleMcp(req, res));
 app.delete('/mcp', (req, res) => handleMcp(req, res));
 
-// OAuth pass-through (required by Claude.ai connector flow)
+// ── OAuth 2.1 pass-through (required by Claude.ai connector) ──
 const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : `http://localhost:${process.env.PORT || 3000}`;
@@ -196,10 +200,12 @@ app.get('/.well-known/oauth-authorization-server', (_req, res) => {
     authorization_endpoint: `${BASE_URL}/authorize`,
     token_endpoint: `${BASE_URL}/token`,
     registration_endpoint: `${BASE_URL}/register`,
+    jwks_uri: `${BASE_URL}/.well-known/jwks.json`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    scopes_supported: ['mcp'],
   });
 });
 
@@ -212,41 +218,82 @@ app.get('/.well-known/oauth-protected-resource', (_req, res) => {
   });
 });
 
-const clients = new Map<string, { client_id: string; redirect_uris: string[] }>();
-const authCodes = new Map<string, string>();
+// Also serve at /mcp/.well-known path (some clients look relative to resource)
+app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
+  res.json({
+    resource: `${BASE_URL}/mcp`,
+    authorization_servers: [BASE_URL],
+    bearer_methods_supported: ['header'],
+    scopes_supported: ['mcp'],
+  });
+});
+
+app.get('/.well-known/jwks.json', (_req, res) => {
+  res.json({ keys: [] });
+});
+
+const clients = new Map<string, { client_id: string; client_secret?: string; redirect_uris: string[] }>();
+const authCodes = new Map<string, { client_id: string; code_challenge?: string; redirect_uri: string }>();
 const tokens = new Set<string>();
 
+// Dynamic Client Registration (RFC 7591)
 app.post('/register', (req, res) => {
   const client_id = randomUUID();
-  clients.set(client_id, {
-    client_id,
-    redirect_uris: req.body?.redirect_uris || [],
-  });
+  const client_secret = randomUUID();
+  const redirect_uris: string[] = req.body?.redirect_uris || [];
+  clients.set(client_id, { client_id, client_secret, redirect_uris });
   res.status(201).json({
     client_id,
+    client_secret,
     client_id_issued_at: Math.floor(Date.now() / 1000),
-    token_endpoint_auth_method: 'none',
+    redirect_uris,
+    token_endpoint_auth_method: 'client_secret_post',
   });
 });
 
+// Authorization endpoint — auto-approve, redirect back with code
 app.get('/authorize', (req, res) => {
-  const { client_id, redirect_uri, state } = req.query as Record<string, string>;
-  if (!client_id || !redirect_uri) {
+  const client_id = req.query.client_id as string;
+  const redirect_uri = req.query.redirect_uri as string;
+  const code_challenge = req.query.code_challenge as string | undefined;
+  const state = req.query.state as string | undefined;
+  const response_type = req.query.response_type as string;
+
+  if (!client_id || !redirect_uri || response_type !== 'code') {
     return res.status(400).json({ error: 'invalid_request' });
   }
+
   const code = randomUUID();
-  authCodes.set(code, client_id);
-  const url = new URL(redirect_uri);
-  url.searchParams.set('code', code);
-  if (state) url.searchParams.set('state', state);
-  res.redirect(302, url.toString());
+  authCodes.set(code, { client_id, code_challenge, redirect_uri });
+
+  const callback = new URL(redirect_uri);
+  callback.searchParams.set('code', code);
+  if (state) callback.searchParams.set('state', state);
+  res.redirect(302, callback.toString());
 });
 
+// Token endpoint
 app.post('/token', (req, res) => {
-  const { grant_type, code } = req.body as Record<string, string>;
-  if (grant_type === 'authorization_code' && authCodes.has(code)) {
+  const grant_type = req.body?.grant_type as string;
+
+  if (grant_type === 'authorization_code') {
+    const code = req.body?.code as string;
+    const codeData = authCodes.get(code);
+    if (!codeData) {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
     authCodes.delete(code);
-    const token = randomUUID();
+
+    // Verify PKCE if challenge was set
+    if (codeData.code_challenge && req.body?.code_verifier) {
+      const crypto = require('node:crypto');
+      const hash = crypto.createHash('sha256').update(req.body.code_verifier).digest();
+      if (hash.toString('base64url') !== codeData.code_challenge) {
+        return res.status(400).json({ error: 'invalid_grant' });
+      }
+    }
+
+    const token = randomUUID() + randomUUID();
     tokens.add(token);
     return res.json({
       access_token: token,
@@ -255,8 +302,9 @@ app.post('/token', (req, res) => {
       scope: 'mcp',
     });
   }
+
   if (grant_type === 'refresh_token') {
-    const token = randomUUID();
+    const token = randomUUID() + randomUUID();
     tokens.add(token);
     return res.json({
       access_token: token,
@@ -265,7 +313,8 @@ app.post('/token', (req, res) => {
       scope: 'mcp',
     });
   }
-  res.status(400).json({ error: 'invalid_grant' });
+
+  res.status(400).json({ error: 'unsupported_grant_type' });
 });
 
 const port = Number(process.env.PORT || 3000);
