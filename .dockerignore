@@ -1,29 +1,5 @@
-# Don't send build artifacts, deps, or local state into the build context.
-# Keeps image builds fast and avoids stale dist sneaking into the runtime stage.
-
 node_modules
-**/node_modules
-**/dist
-**/*.tsbuildinfo
-
-# Local dev state
-.env
-.env.*
-.DS_Store
-*.log
-npm-debug.log*
-
-# Version control & editor cruft
-.git
-.gitignore
-.vscode
-.idea
-
-# Docs don't ship with the image (kept in the repo on the NAS).
-docs
-README.md
-*.md
-
-# Existing NAS-only artifacts that shouldn't influence the build
+dist
 data
-**/data
+*.tsbuildinfo
+.git

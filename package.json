@@ -1,26 +1,26 @@
 {
   "name": "prd-builder-mcp",
-  "version": "0.1.0",
-  "description": "MCP App for building interactive Product Requirements Documents inside Claude and other MCP-compatible AI clients",
-  "private": true,
-  "workspaces": [
-    "packages/shared",
-    "packages/prd-engine",
-    "packages/mcp-server",
-    "packages/ui"
-  ],
+  "version": "0.2.0",
+  "description": "Minimal MCP App — UI rendering test",
+  "type": "module",
+  "main": "dist/server.js",
   "scripts": {
-    "dev:server": "npm run dev --workspace @prd-builder/mcp-server",
-    "dev:ui": "npm run dev --workspace @prd-builder/ui",
-    "build": "npm run build --workspaces",
-    "build:ui": "npm run build --workspace @prd-builder/ui",
-    "build:server": "npm run build --workspace @prd-builder/mcp-server",
-    "typecheck": "npm run typecheck --workspaces",
-    "start": "npm run start --workspace @prd-builder/mcp-server",
-    "start:http": "npm run start:http --workspace @prd-builder/mcp-server"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.4",
+    "@mcp-ui/server": "^6.1.0",
+    "express": "^4.21.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.0"
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0"
   },
   "engines": {
     "node": ">=20.0.0"
